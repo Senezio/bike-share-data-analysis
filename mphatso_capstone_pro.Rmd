@@ -1,0 +1,778 @@
+---
+title: "Cyclistic Bike-Share Analysis Case Study Data Analysis"
+author: "Mphatso Senezio"
+date: "2024-08-17"
+output: html_document
+---
+## Introduction
+* I analyzed the usage patterns of annual members and casual riders of Cyclistic, a bike-share company in Chicago.
+* The analysis involved cleaning and manipulating a large dataset to uncover key insights.
+* The findings revealed that casual riders are more likely to take longer rides, especially on weekends and late at night. 
+* I have proposed three recommendations aimed at converting casual riders into loyal members through targeted marketing and optimized service offerings.
+
+## What?
+* "How do annual members and casual riders use Cyclistic bikes differently?"
+* Understanding the differences in bike usage between these two groups would help tailor marketing strategies to convert casual riders into annual members.
+* To address this question, I needed to gather comprehensive data on bike usage, ensure its quality, and analyze it to uncover meaningful insights.
+
+## Data Collection, Organization, and Integrity (Prepare)
+* Data required for this analysis was from Divvy's official source.
+* The data included ride details for several months, covering a wide range of bike trips.
+* The data met the ROCK criteria—Reliable, Original, Comprehensive, Current, and Cited.
+* It was sourced directly from Divvy and was up-to-date
+
+### Organization of the data
+* I organized the data by downloading and combining multiple CSV files from August 2023 through July 2024.
+* Each file represented a month's worth of bike trip data.
+* The data was structured with various attributes, including ride IDs, bike types, timestamps, and station information.
+
+### Data integrity
+I verified the data's integrity by checking for any issues or inconsistencies that might affect the analysis. This step was crucial to ensure that the data was ready for the next stages of processing and analysis.
+
+```{r COLLECT DATA, include=FALSE}
+#=====================
+# STEP 1: COLLECT DATA
+#=====================
+
+# Load necessary libraries
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(sf)
+library(tmap)
+library(osmdata)
+
+# Setting the file path
+file_path <- "C:/Users/mphat/OneDrive/Desktop/Mphatso_capston_Project/"
+
+# Loading each dataset into a separate data frame
+august_2023 <- read_csv(paste0(file_path, "202308-divvy-tripdata.csv"))
+september_2023 <- read_csv(paste0(file_path, "202309-divvy-tripdata.csv"))
+october_2023 <- read_csv(paste0(file_path, "202310-divvy-tripdata.csv"))
+november_2023 <- read_csv(paste0(file_path, "202311-divvy-tripdata.csv"))
+december_2023 <- read_csv(paste0(file_path, "202312-divvy-tripdata.csv"))
+january_2024 <- read_csv(paste0(file_path, "202401-divvy-tripdata.csv"))
+february_2024 <- read_csv(paste0(file_path, "202402-divvy-tripdata.csv"))
+march_2024 <- read_csv(paste0(file_path, "202403-divvy-tripdata.csv"))
+april_2024 <- read_csv(paste0(file_path, "202404-divvy-tripdata.csv"))
+may_2024 <- read_csv(paste0(file_path, "202405-divvy-tripdata.csv"))
+june_2024 <- read_csv(paste0(file_path, "202406-divvy-tripdata.csv"))
+july_2024 <- read_csv(paste0(file_path, "202407-divvy-tripdata.csv"))
+
+#====================================================
+# STEP 2: WRANGLE DATA AND COMBINE INTO A SINGLE FILE
+#====================================================
+
+# Combining all the data frames into one main data frame
+cyclistic_bike_data <- bind_rows(august_2023, september_2023, october_2023, november_2023, 
+                                 december_2023, january_2024, february_2024, march_2024, 
+                                 april_2024, may_2024, june_2024, july_2024)
+
+```
+
+## Data Cleaning and Transformation (Process)
+In the data preparation phase, I focused on cleaning and transforming the dataset to ensure its readiness for analysis. I performed the following steps:
+
+* **Loading and Combining Data**: I used R to load and combine the monthly datasets into a single data frame.
+
+* **Cleaning the Data**: I identified and resolved issues related to station IDs and names. By creating lookup tables and resolving duplicates, I ensured that all station names were correctly matched and filled in where missing.
+
+```{r CLEAN UP AND ADD DATA TO PREPARE FOR ANALYSIS, include=FALSE}
+#=======================================================
+# STEP 3: CLEAN UP AND ADD DATA TO PREPARE FOR ANALYSIS
+#======================================================
+
+# Find matching station IDs where end_station_id matches start_station_id
+matching_station_ids <- cyclistic_bike_data %>%
+  filter(end_station_id %in% start_station_id) %>%
+  select(end_station_id, start_station_id, end_station_name, start_station_name) %>%
+  distinct()
+
+# Create a lookup table for end_station_id to end_station_name
+end_station_lookup <- matching_station_ids %>%
+  select(end_station_id, end_station_name) %>%
+  distinct()
+
+# Create a lookup table for start_station_id to start_station_name
+start_station_lookup <- matching_station_ids %>%
+  select(start_station_id, start_station_name) %>%
+  distinct()
+
+# Check for duplicate entries in lookup tables
+end_station_lookup %>%
+  group_by(end_station_id) %>%
+  filter(n() > 1) %>%
+  distinct()
+
+start_station_lookup %>%
+  group_by(start_station_id) %>%
+  filter(n() > 1) %>%
+  distinct()
+
+# Remove duplicates by keeping the first occurrence
+end_station_lookup_clean <- end_station_lookup %>%
+  distinct(end_station_id, .keep_all = TRUE)
+
+start_station_lookup_clean <- start_station_lookup %>%
+  distinct(start_station_id, .keep_all = TRUE)
+
+# Use cleaned lookup tables to fill missing values
+cyclistic_bike_data <- cyclistic_bike_data %>%
+  left_join(end_station_lookup_clean, by = "end_station_id", suffix = c("", "_lookup")) %>%
+  mutate(
+    end_station_name = ifelse(is.na(end_station_name), end_station_name_lookup, end_station_name)
+  ) %>%
+  select(-end_station_name_lookup)
+
+cyclistic_bike_data <- cyclistic_bike_data %>%
+  left_join(start_station_lookup_clean, by = "start_station_id", suffix = c("", "_lookup")) %>%
+  mutate(
+    start_station_name = ifelse(is.na(start_station_name), start_station_name_lookup, start_station_name)
+  ) %>%
+  select(-start_station_name_lookup)
+
+```
+
+* **Handling Missing and Invalid Data**: I filtered out rows with missing or invalid data. This included removing rides with zero or negative lengths and optionally removing rides with durations of 10 seconds or less to ensure only meaningful data was included.
+
+```{r Drop rows with NA values, include=FALSE}
+# Drop rows with NA values in all columns except for start_station_name
+cyclistic_bike_data_cleaned <- cyclistic_bike_data %>%
+  filter(
+    !is.na(end_station_name) &
+      !is.na(end_station_id) &
+      !is.na(end_lat) &
+      !is.na(end_lng) &
+      !is.na(start_station_id) &
+      !is.na(start_lat) &
+      !is.na(start_lng)
+  )
+
+# Save the number of rows after cleaning
+cleaned_row_count <- nrow(cyclistic_bike_data_cleaned)
+print(paste("Number of rows remaining after cleaning:", cleaned_row_count))
+
+# Count the number of NA values in the start_station_name column
+na_start_station_name_count <- sum(is.na(cyclistic_bike_data_cleaned$start_station_name))
+print(paste("Number of NA values in start_station_name:", na_start_station_name_count))
+
+# Check for NA values in the dataset
+na_summary <- cyclistic_bike_data_cleaned %>%
+  summarize_all(~sum(is.na(.)))
+print(na_summary)
+
+# Create the ride_length column
+cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
+  mutate(ride_length = ended_at - started_at)
+
+# Create the day_of_week column
+cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
+  mutate(day_of_week = wday(started_at, label = TRUE, abbr = FALSE))
+
+```
+
+### **Creating New Columns**
+
+I added new columns to enhance the dataset:
+
+  1. **ride_length**: Calculated as the difference between ended_at and started_at.
+  2. **day_of_week**: Extracted from the start timestamp to analyze usage patterns by day.
+  3. **Final Checks**: I reviewed the cleaned dataset to ensure it was free of errors and ready for analysis. This included calculating summary statistics such as the mean, maximum, and mode of ride lengths and days of the week.
+
+
+```{r Filter the dataset for trips, include=FALSE}
+# Filter the dataset for trips with a ride length of 0 or less than 0
+zero_or_negative_ride_length <- cyclistic_bike_data_cleaned %>%
+  filter(ride_length <= 0)
+View(zero_or_negative_ride_length)
+print(head(zero_or_negative_ride_length))
+
+# Drop all rides with a ride length equal to or less than 0 seconds
+cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
+  filter(ride_length > 0)
+
+# Drop rides with a duration of 10 seconds or less (optional)
+cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
+  filter(ride_length > 10)
+
+# Print the number of rows remaining after filtering
+print(paste("Number of rows remaining after filtering:", nrow(cyclistic_bike_data_cleaned)))
+
+# Calculate the mean of ride_length
+mean_ride_length <- mean(cyclistic_bike_data_cleaned$ride_length, na.rm = TRUE)
+
+# Calculate the max of ride_length
+max_ride_length <- max(cyclistic_bike_data_cleaned$ride_length, na.rm = TRUE)
+
+# Calculate the mean of ride_length
+mean_ride_length <- mean(cyclistic_bike_data_cleaned$ride_length, na.rm = TRUE)
+
+# Calculate the max of ride_length
+max_ride_length <- max(cyclistic_bike_data_cleaned$ride_length, na.rm = TRUE)
+
+# Calculate the mode of day_of_week
+mode_day_of_week_index <- cyclistic_bike_data_cleaned %>%
+  group_by(day_of_week) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  arrange(desc(count)) %>%
+  slice(1) %>%
+  pull(day_of_week)
+
+# Convert mode_day_of_week_index to character using factor levels
+mode_day_of_week <- levels(cyclistic_bike_data_cleaned$day_of_week)[mode_day_of_week_index]
+
+# Debug: Print mode_day_of_week to verify it's correct
+print(paste("Mode day of the week:", mode_day_of_week))
+```
+
+
+```{r Print the results, echo=TRUE}
+# Load the DT library for interactive tables
+library(DT)
+
+# Create a data frame for the results
+results_df <- data.frame(
+  Metric = c("Mean Ride Length", "Max Ride Length", "Mode Day of the Week"),
+  Value = c(
+    format(mean_ride_length, digits = 2),
+    format(max_ride_length, digits = 2),
+    mode_day_of_week
+  )
+)
+
+# Print the data frame as an interactive HTML table
+datatable(results_df, caption = "Summary Statistics", options = list(pageLength = 5))
+```
+
+I prepared a clean, comprehensive dataset that was suitable for analyzing bike usage patterns between annual members and casual riders. This ensured that the insights derived from the analysis would be accurate and reliable.
+
+## Descriptive Analysis(Analyze)
+
+Now that the data has been cleaned and transformed, it’s time to analyze it to uncover meaningful insights. Here’s how the analysis was conducted, the findings, and their implications:
+
+#### 1. Proportional Share of Rides by Member Type
+
+* I calculated the proportional share of rides by member type.
+* Annual members account for approximately 64.8% of the rides, while casual riders make up 35.2%. 
+* This distribution highlights that while annual members contribute to a larger portion of the rides, casual riders still represent a significant segment.
+
+```{r Calculate the proportional share of rides by member type, include=FALSE}
+# Calculate the proportional share of rides by member type
+ride_share_by_member_type <- cyclistic_bike_data_cleaned %>%
+  group_by(member_casual) %>%
+  summarize(total_rides = n()) %>%
+  mutate(proportion = total_rides / sum(total_rides))
+
+```
+
+
+```{r calculated proportions, echo=FALSE}
+# Load DT package
+library(DT)
+
+# Display the data frame as an interactive HTML table
+datatable(ride_share_by_member_type, 
+          caption = "Proportional Share of Rides by Member Type",
+          options = list(pageLength = 5, 
+                         autoWidth = TRUE))
+
+```
+
+A pie chart below was created to visually represent the proportional share of rides. This chart clearly illustrates the dominance of *annual members* in the bike-share program.
+
+```{r Pie Chart Proportional share, echo=FALSE}
+# Visualize the proportional share using a pie chart
+ggplot(ride_share_by_member_type, aes(x = "", y = proportion, fill = member_casual)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y") +
+  theme_void() +
+  labs(title = "Proportional Share of Rides by Member Type", 
+       fill = "Member Type") +
+  geom_text(aes(label = scales::percent(proportion)), 
+            position = position_stack(vjust = 0.5),
+            color = "white")
+```
+
+#### 2. Analysis of Short Rides
+
+Short rides, defined as those with a duration of less than **60 seconds**, were analyzed to understand their prevalence among different member types. The analysis revealed that **casual riders had a higher count of short rides (16,130) compared to annual members (30,724)**. This suggests that casual riders may be engaging in more short trips, which could reflect different usage patterns compared to annual members.
+
+```{r Short Rides, include=FALSE}
+# Filter rides with a ride length of less than 60 seconds
+short_rides <- cyclistic_bike_data_cleaned %>%
+  filter(ride_length < 60)
+
+# Calculate the number of short rides by member type
+short_rides_summary <- short_rides %>%
+  group_by(member_casual) %>%
+  summarize(count = n())
+```
+
+
+```{r Short Rides Summary, echo=FALSE}
+# Load DT package
+library(DT)
+
+# Display the data frame as an interactive HTML table
+datatable(short_rides_summary, 
+          caption = "Summary of Short Rides by Member Type",
+          options = list(pageLength = 5, 
+                         autoWidth = TRUE))
+
+
+```
+### 3. Bike Usage by Type and Member Type
+
+The analysis of ride counts by rideable type and member type shows distinct patterns in bike utilization:
+
+* **Classic Bikes:** Annual members used classic bikes significantly more (1,872,074 rides) compared to casual riders (973,720 rides).
+
+* **Electric Bikes:** Electric bikes were more popular among casual riders (496,948 rides) than annual members (867,936 rides).
+
+* **Docked Bikes:** Docked bikes had a relatively low usage overall, with casual riders using them 15,431 times.
+
+```{r Calculate the number of rides by rideable type and member type, include=FALSE}
+# Calculate the number of rides by rideable type and member type
+bike_usage_by_type <- cyclistic_bike_data_cleaned %>%
+  group_by(rideable_type, member_casual) %>%
+  summarize(ride_count = n(), .groups = 'drop')
+
+print(bike_usage_by_type)
+```
+
+
+```{r number of rides by rideable type and member type, echo=FALSE}
+# Plot the number of rides by rideable type and member type
+ggplot(bike_usage_by_type, aes(x = rideable_type, y = ride_count, fill = member_casual)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Number of Rides by Rideable Type and Member Type", 
+       x = "Rideable Type", 
+       y = "Number of Rides", 
+       fill = "Member Type") +
+  theme_minimal()
+
+```
+
+The visualization of this data using a bar chart reveals that classic bikes are preferred by annual members, while casual riders lean more towards electric bikes. This suggests that classic bikes are a staple for long-term users, while casual riders may seek the added convenience of electric bikes.
+
+```{r chart of rideable_type by member type, echo=FALSE}
+# Plot a bar chart of rideable_type by member type
+ggplot(rides_by_rideable_type_and_member_type, aes(x = rideable_type, y = ride_count, fill = member_casual)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Number of Rides by Rideable Type and Member Type", 
+       x = "Rideable Type", 
+       y = "Number of Rides") +
+  theme_minimal()
+```
+
+### Summary of Analysis
+
+* **Proportional Share of Rides**: Annual members account for a majority of the rides (64.8%), indicating they are the primary users of the bike-share service.
+
+* **Short Rides Analysis**: Casual riders have a higher count of short rides compared to annual members, suggesting a difference in usage patterns.
+
+* **Rideable Types**: Both casual riders and annual members prefer classic and electric bikes, with annual members showing a higher overall usage of these types.
+
+These insights reveal distinct usage patterns between casual riders and annual members, providing a foundation for targeted marketing strategies aimed at converting casual riders into annual members. Understanding these patterns will help tailor promotions and improve member engagement.
+
+
+## Analyzing Trends and Insights
+
+In this section, I delved into the various trends and insights derived from the Cyclistic bike-share data. This analysis aims to uncover patterns in bike usage that could inform strategic decisions for enhancing user experience and optimizing service delivery.
+
+### 1. Average Ride Length by Day of the Week
+
+* Casual riders consistently have longer ride lengths compared to annual members across all days. 
+* *On Sundays*, casual riders have an average ride length of approximately 1666 seconds, whereas annual members have an average of about 846 seconds. 
+
+This indicates that casual riders might be using the bikes for longer trips, possibly for leisure or exploration, while annual members might be using them for shorter, more frequent trips.
+
+A bar plot below illustrates these differences, highlighting the variation in average ride length between casual and annual members throughout the week.
+
+```{r Calculation of average ride_length, include=FALSE}
+# Calculate average ride_length for users by day_of_week
+average_ride_length_by_day <- cyclistic_bike_data_cleaned %>%
+  group_by(day_of_week, member_casual) %>%
+  summarise(average_ride_length = mean(ride_length, na.rm = TRUE))
+
+# Print the summary to check the results
+print(average_ride_length_by_day)
+```
+
+```{r average ride length by day of the week, echo=FALSE}
+# Create a bar plot to show average ride length by day of the week
+ggplot(average_ride_length_by_day, aes(x = day_of_week, y = average_ride_length, fill = member_casual)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Average Ride Length by Day of the Week and Member Type", 
+       x = "Day of Week", 
+       y = "Average Ride Length (seconds)") +
+  theme_minimal()
+```
+
+### 2. Number of Rides by Hour of the Day
+
+* The hourly ride analysis indicates that bike usage peaks during the late morning and early evening hours for both member types.
+
+* Casual riders have a consistent number of rides throughout the day but show significant peaks around 8-9 AM and 5-6 PM.
+
+* Annual members also exhibit peaks at these times but generally have a more consistent usage pattern throughout the day.
+
+```{r number of rides by hour of the day, echo=FALSE}
+# Add the hour_of_day column to the dataset
+cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
+  mutate(hour_of_day = hour(started_at))
+
+# Analyze the number of rides by hour of the day
+hourly_rides <- cyclistic_bike_data_cleaned %>%
+  group_by(hour_of_day, member_casual) %>%
+  summarize(ride_count = n(), .groups = 'drop')
+
+# Load DT package
+library(DT)
+
+# Display the data frame as an interactive HTML table
+datatable(hourly_rides, 
+          caption = "Number of Rides by Hour of the Day and Member Type",
+          options = list(pageLength = 10, 
+                         autoWidth = TRUE, 
+                         scrollX = TRUE))
+
+```
+
+```{r Plot the number of rides by hour of the day, echo=FALSE}
+# Plot the number of rides by hour of the day
+ggplot(hourly_rides, aes(x = hour_of_day, y = ride_count, color = member_casual, group = member_casual)) +
+  geom_line() +
+  labs(title = "Number of Rides by Hour of the Day", x = "Hour of Day", y = "Number of Rides") +
+  theme_minimal()
+```
+
+### 3. Most Popular Start and End Stations
+
+The analysis identified the top 10 most popular start and end stations. The most frequented start station is "**Streeter Dr & Grand Ave**," and the most frequented end station is the same location. These stations serve as key hubs for bike-share activity.
+
+* **Start Stations**: A bar plot shows the top start stations.
+```{r popular start stations, include=FALSE}
+# Calculate the most popular start stations
+popular_start_stations <- cyclistic_bike_data_cleaned %>%
+  group_by(start_station_name) %>%
+  summarize(ride_count = n(), .groups = 'drop') %>%
+  arrange(desc(ride_count))
+
+# Top 10 most popular start stations
+top_start_stations <- popular_start_stations %>%
+  top_n(10, ride_count)
+```
+
+```{r Plot for start stations, echo=FALSE}
+# Plot for start stations
+ggplot(top_start_stations, aes(x = reorder(start_station_name, ride_count), y = ride_count, fill = start_station_name)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +  # Flip coordinates to make the station names readable
+  labs(title = "Top 10 Most Popular Start Stations", 
+       x = "Start Station Name", 
+       y = "Number of Rides") +
+  theme_minimal() +
+  theme(legend.position = "none")  # Hide legend for clarity
+```
+
+* **End Stations:** A similar bar plot displays the top end stations.
+```{r popular end stations, include=FALSE}
+# Calculate the most popular end stations
+popular_end_stations <- cyclistic_bike_data_cleaned %>%
+  group_by(end_station_name) %>%
+  summarize(ride_count = n(), .groups = 'drop') %>%
+  arrange(desc(ride_count))
+
+# Top 10 most popular end stations
+top_end_stations <- popular_end_stations %>%
+  top_n(10, ride_count)
+```
+
+
+```{r Plot for end stations, echo=FALSE}
+# Plot for end stations
+ggplot(top_end_stations, aes(x = reorder(end_station_name, ride_count), y = ride_count, fill = end_station_name)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +  # Flip coordinates to make the station names readable
+  labs(title = "Top 10 Most Popular End Stations", 
+       x = "End Station Name", 
+       y = "Number of Rides") +
+  theme_minimal() +
+  theme(legend.position = "none")  # Hide legend for clarity
+
+```
+
+### 4. Top Stations by Member Type
+
+Breaking down popular start and end stations by member type revealed differences in preferences. For instance, annual members favor stations closer to their residences or regular routes, while casual riders might use different stations depending on their specific trip needs.
+
+```{r Calculate the most popular start stations, include=FALSE}
+# Calculate the most popular start stations by member type
+popular_start_stations_by_member <- cyclistic_bike_data_cleaned %>%
+  group_by(member_casual, start_station_name) %>%
+  summarize(ride_count = n(), .groups = 'drop') %>%
+  arrange(member_casual, desc(ride_count))
+
+# Top 10 most popular start stations for each member type
+top_start_stations_by_member <- popular_start_stations_by_member %>%
+  group_by(member_casual) %>%
+  slice_max(order_by = ride_count, n = 10)
+```
+
+```{r Plot for start stations by member type, echo=FALSE}
+# Plot for start stations by member type
+ggplot(top_start_stations_by_member, aes(x = reorder(start_station_name, ride_count), y = ride_count, fill = member_casual)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ member_casual) +  # Create separate plots for each member type
+  coord_flip() +  # Flip coordinates to make the station names readable
+  labs(title = "Top 10 Start Stations by Member Type", 
+       x = "Start Station Name", 
+       y = "Number of Rides") +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+
+```{r Calculate the most popular end stations, include=FALSE}
+# Calculate the most popular end stations by member type
+popular_end_stations_by_member <- cyclistic_bike_data_cleaned %>%
+  group_by(member_casual, end_station_name) %>%
+  summarize(ride_count = n(), .groups = 'drop') %>%
+  arrange(member_casual, desc(ride_count))
+
+# Top 10 most popular end stations for each member type
+top_end_stations_by_member <- popular_end_stations_by_member %>%
+  group_by(member_casual) %>%
+  slice_max(order_by = ride_count, n = 10)
+```
+
+
+```{r Plot for end stations by member type, echo=FALSE}
+# Plot for end stations by member type
+ggplot(top_end_stations_by_member, aes(x = reorder(end_station_name, ride_count), y = ride_count, fill = member_casual)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ member_casual) +  # Create separate plots for each member type
+  coord_flip() +  # Flip coordinates to make the station names readable
+  labs(title = "Top 10 End Stations by Member Type", 
+       x = "End Station Name", 
+       y = "Number of Rides") +
+  theme_minimal() +
+  theme(legend.position = "none")  # Hide legend for clarity
+```
+
+### 5. Ride Frequency by Day of the Week
+
+The analysis of ride frequency by day of the week shows that bike usage is relatively high on weekdays, peaking in midweek. Saturdays and Sundays also see high usage, which could be indicative of leisure or recreational rides during the weekends.
+
+```{r Ride Frequency by Day of Week, include=FALSE}
+# Ride Frequency by Day of Week
+ride_frequency_by_day <- cyclistic_bike_data_cleaned %>%
+  group_by(day_of_week) %>%
+  summarize(ride_count = n(), .groups = 'drop')
+
+print(ride_frequency_by_day)
+```
+
+
+```{r bike usage, echo=FALSE}
+ggplot(ride_frequency_by_day, aes(x = day_of_week, y = ride_count, fill = day_of_week)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Number of Rides by Day of the Week", x = "Day of Week", y = "Number of Rides") +
+  theme_minimal()
+```
+
+### 6. Member vs. Casual Usage Patterns
+
+The analysis showed that casual riders have longer average ride durations for classic and docked bikes compared to annual members. Annual members have shorter ride durations across all bike types, suggesting more frequent but shorter trips.
+
+```{r Member vs. Casual Usage Patterns, include=FALSE}
+#Member vs. Casual Usage Patterns
+member_vs_casual_usage <- cyclistic_bike_data_cleaned %>%
+  group_by(member_casual, rideable_type) %>%
+  summarize(average_ride_length = mean(ride_length, na.rm = TRUE), .groups = 'drop')
+
+print(member_vs_casual_usage)
+```
+
+A bar plot illustrates average ride duration by rideable type and member type.
+
+```{r average ride duration by rideable type and member type., echo=FALSE}
+ggplot(member_vs_casual_usage, aes(x = rideable_type, y = average_ride_length, fill = member_casual)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Average Ride Length by Member Type and Rideable Type", x = "Rideable Type", y = "Average Ride Length (seconds)") +
+  theme_minimal()
+```
+
+### 8. Average Ride Duration by Day of Week and Hour
+The analysis of average ride duration by day of week and hour of the day provides insights into when riders take longer trips. For example:
+
+* Ride durations vary significantly across different hours of the day and days of the week.
+
+* Longer rides tend to occur during certain hours, indicating potential peak usage times or periods when riders may have more leisure time.
+
+```{r Ride Duration Analysis by Day of Week and Hour, include=FALSE}
+# Ride Duration Analysis by Day of Week and Hour
+avg_ride_duration <- cyclistic_bike_data_cleaned %>%
+  group_by(day_of_week, hour_of_day) %>%
+  summarize(average_ride_length = mean(ride_length, na.rm = TRUE), .groups = 'drop')
+
+print(avg_ride_duration)
+```
+
+
+```{r average_ride_duration_by_day_week_and_hour, echo=FALSE}
+ggplot(avg_ride_duration, aes(x = hour_of_day, y = day_of_week, fill = average_ride_length)) +
+  geom_tile() +
+  scale_fill_viridis_c() +
+  labs(title = "Average Ride Duration by Day of Week and Hour of Day", x = "Hour of Day", y = "Day of Week") +
+  theme_minimal()
+```
+
+The heatmap visualization highlights these patterns, with brighter colors representing longer ride durations. This information can help optimize bike availability and identify times when additional support might be needed.
+
+### 9. Monthly Ride Trends
+Monthly ride trends reveal fluctuations in bike usage over the year:
+
+* Ride counts increase in warmer months, with May showing the highest number of rides.
+
+* There is a noticeable seasonal pattern, with casual riders showing greater variability across months compared to annual members, who maintain more consistent usage throughout the year.
+
+The line graph demonstrates these trends, emphasizing the importance of adjusting marketing strategies and service levels according to seasonal demand.
+
+```{r trends across different months, include=FALSE}
+# Analyze trends across different months to detect any seasonal variations in bike usage.
+cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
+  mutate(month = month(started_at, label = TRUE))
+
+monthly_rides <- cyclistic_bike_data_cleaned %>%
+  group_by(month, member_casual) %>%
+  summarize(ride_count = n(), .groups = 'drop')
+
+print(monthly_rides)
+```
+
+
+```{r Monthly Ride Trends by Member Type, echo=FALSE}
+ggplot(monthly_rides, aes(x = month, y = ride_count, color = member_casual, group = member_casual)) +
+  geom_line() +
+  labs(title = "Monthly Ride Trends by Member Type", x = "Month", y = "Number of Rides") +
+  theme_minimal()
+```
+
+### 10. Average Ride Duration by Rideable Type
+
+The comparison of average ride duration across different bike types and member categories shows:
+
+* *Classic bikes* generally have a higher average ride duration compared to electric bikes.
+
+* *Casual riders* tend to take longer trips on both classic and electric bikes compared to annual members.
+
+This bar chart indicates that classic bikes are associated with longer rides, suggesting that they might be preferred for extended journeys.
+
+```{r Compare average ride duration , include=FALSE}
+# Compare average ride duration across different types of bikes and between members and casual riders.
+avg_ride_duration_by_type <- cyclistic_bike_data_cleaned %>%
+  group_by(rideable_type, member_casual) %>%
+  summarize(average_ride_length = mean(ride_length, na.rm = TRUE), .groups = 'drop')
+```
+```{r avg_ride_duration_by_type, echo=FALSE}
+ggplot(avg_ride_duration_by_type, aes(x = rideable_type, y = average_ride_length, fill = member_casual)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Average Ride Duration by Rideable Type and Member Type", x = "Rideable Type", y = "Average Ride Duration (seconds)") +
+  theme_minimal()
+```
+
+### 11. Station Utilization
+The analysis of station utilization reveals the most popular bike stations:
+
+* The top station, **"Streeter Dr & Grand Ave,"** had the highest number of rides (60,023).
+
+* Other highly utilized stations include "DuSable Lake Shore Dr & Monroe St" and "Michigan Ave & Oak St."
+
+* The data shows that certain stations experience significantly higher usage, which can inform decisions about station maintenance and placement of additional resources.
+```{r Calculate the utilization of stations, include=FALSE}
+# Calculate the utilization of stations
+station_utilization <- cyclistic_bike_data_cleaned %>%
+  group_by(start_station_name) %>%
+  summarize(
+    station_rides = n(),
+    unique_bikes = n_distinct(ride_id)
+  ) %>%
+  arrange(desc(station_rides))
+
+# View the top 10 most utilized stations
+top_10_stations <- head(station_utilization, 10)
+```
+
+
+```{r Display the table in Markdown, echo=FALSE}
+# Display the table in Markdown
+knitr::kable(top_10_stations, caption = "Top 10 Most Utilized Stations")
+
+```
+### Bike usage by time of year, rideable type, and member type
+Analyzing the data on bike usage by time of year, rideable type, and member type, several key insights emerge that can shape our understanding of rider behavior:
+
+```{r analyze the type of bike usage by time of year and member type, include=FALSE}
+#To analyze the type of bike usage by time of year and member type
+#Group and Summarize the Data
+bike_usage_by_month_type <- cyclistic_bike_data_cleaned %>%
+  group_by(rideable_type, month, member_casual) %>%
+  summarize(ride_count = n(), .groups = 'drop')
+
+# Print all rows of the bike usage by month, type, and member type
+print(bike_usage_by_month_type, n = Inf)
+```
+
+```{r bike_usage_by_month_type_member, echo=FALSE}
+ggplot(bike_usage_by_month_type, aes(x = month, y = ride_count, fill = member_casual)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~rideable_type) +
+  labs(title = "Monthly Bike Usage by Rideable Type and Member Type", 
+       x = "Month", 
+       y = "Number of Rides", 
+       fill = "Member Type") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+
+* **Seasonal Preferences**: The data shows that usage of both classic and electric bikes increases significantly during the warmer months (May to September). This trend is consistent across both casual riders and members, with peak usage observed in July and August.
+
+* **Rideable Type Trends**: Classic bikes are the most popular type among both casual riders and members throughout the year. However, electric bikes see a notable increase in usage during the colder months (January to March), particularly among members, suggesting that the convenience and speed of electric bikes may be more appealing during less favorable weather conditions.
+
+* **Member vs. Casual Riders**: Members consistently account for a higher number of rides compared to casual riders across all months and bike types. However, casual riders show a relatively higher usage of electric bikes during peak summer months, indicating that they might be more willing to pay a premium for a faster ride during the busiest periods.
+
+* **Impact of Winter**: During the winter months (November to February), bike usage declines sharply, with a more pronounced drop in casual rider numbers. Members, however, continue to use both classic and electric bikes, albeit at lower rates, suggesting a higher level of commitment or necessity among this group.
+
+#### Conclusion:
+These insights suggest that marketing efforts to convert casual riders to members could focus on highlighting the year-round benefits of membership, particularly the accessibility of electric bikes during winter. Additionally, promoting the advantages of classic bikes during the summer could help attract more casual riders during peak periods.
+
+## Final Conclusion
+
+* Annual members take shorter rides on average and are more consistent in their usage throughout the week. 
+* Casual riders tend to have longer ride durations and a higher concentration of rides during weekends and late hours.
+* The classic bikes are most popular among both user types.
+* Casual riders also have a notable preference for electric bikes.
+
+## Application of Insights
+Use these insights to design targeted marketing strategies and improve service offerings. By understanding the patterns of usage, Cyclistic can offer tailored promotions to casual riders that encourage them to become annual members. Additionally, the company can optimize the availability of bike types according to the preferences and peak times of different rider groups.
+
+## Next Steps
+
+1. **Targeted Marketing Campaigns:** Develop and launch marketing campaigns that highlight the benefits of membership, particularly focusing on how it suits the casual riders' usage patterns.
+
+2. **Service Optimization:** Adjust bike availability and station resources to cater to the peak usage times and preferences identified in the analysis.
+
+3. **Further Data Collection:** Consider collecting more detailed data on ride purpose and user demographics to refine the marketing strategies further.
+
+## Top Three Recommendations
+
+* **Launch Weekend Membership Deals**: Introduce special weekend membership plans or promotions to incentivize casual riders to commit to a membership.
+
+* **Promote Electric Bikes with Membership**: Electric bikes are popular among casual riders. Cyclistic should promote memberships that offer exclusive benefits for electric bike usage, such as reduced rates or priority access.
+
+* **Increase Marketing During Late Hours:** Casual riders have a higher usage rate during late hours. Cyclistic should focus on marketing efforts during these hours, perhaps with special offers that appeal to late-night riders.

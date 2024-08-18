@@ -1,0 +1,604 @@
+# Load necessary libraries
+library(readr)
+library(dplyr)
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+
+# Setting the file path
+file_path <- "C:/Users/mphat/OneDrive/Desktop/Mphatso_capston_Project/"
+
+# Loading each dataset into a separate data frame
+august_2023 <- read_csv(paste0(file_path, "cleaned_cyclistic_bike_data.csv"))
+
+# Combining all the data frames into one main data frame
+cyclistic_bike_data <- bind_rows(august_2023)
+
+# Find matching station IDs where end_station_id matches start_station_id
+matching_station_ids <- cyclistic_bike_data %>%
+  filter(end_station_id %in% start_station_id) %>%
+  select(end_station_id, start_station_id, end_station_name, start_station_name) %>%
+  distinct()
+
+# Create a lookup table for end_station_id to end_station_name
+end_station_lookup <- matching_station_ids %>%
+  select(end_station_id, end_station_name) %>%
+  distinct()
+
+# Create a lookup table for start_station_id to start_station_name
+start_station_lookup <- matching_station_ids %>%
+  select(start_station_id, start_station_name) %>%
+  distinct()
+
+
+# Check for duplicate entries in lookup tables
+end_station_lookup %>%
+  group_by(end_station_id) %>%
+  filter(n() > 1) %>%
+  distinct()
+
+start_station_lookup %>%
+  group_by(start_station_id) %>%
+  filter(n() > 1) %>%
+  distinct()
+
+# Remove duplicates by keeping the first occurrence
+end_station_lookup_clean <- end_station_lookup %>%
+  distinct(end_station_id, .keep_all = TRUE)
+
+start_station_lookup_clean <- start_station_lookup %>%
+  distinct(start_station_id, .keep_all = TRUE)
+
+# Use cleaned lookup tables to fill missing values
+cyclistic_bike_data <- cyclistic_bike_data %>%
+  left_join(end_station_lookup_clean, by = "end_station_id", suffix = c("", "_lookup")) %>%
+  mutate(
+    end_station_name = ifelse(is.na(end_station_name), end_station_name_lookup, end_station_name)
+  ) %>%
+  select(-end_station_name_lookup)
+
+cyclistic_bike_data <- cyclistic_bike_data %>%
+  left_join(start_station_lookup_clean, by = "start_station_id", suffix = c("", "_lookup")) %>%
+  mutate(
+    start_station_name = ifelse(is.na(start_station_name), start_station_name_lookup, start_station_name)
+  ) %>%
+  select(-start_station_name_lookup)
+
+
+# Drop rows with NA values in all columns except for start_station_name
+cyclistic_bike_data_cleaned <- cyclistic_bike_data %>%
+  filter(
+    !is.na(end_station_name) &
+      !is.na(end_station_id) &
+      !is.na(end_lat) &
+      !is.na(end_lng) &
+      !is.na(start_station_id) &
+      !is.na(start_lat) &
+      !is.na(start_lng)
+  )
+
+# Save the number of rows after cleaning
+cleaned_row_count <- nrow(cyclistic_bike_data_cleaned)
+
+# Print the number of rows remaining after cleaning
+print(paste("Number of rows remaining after cleaning:", cleaned_row_count))
+
+# Count the number of NA values in the start_station_name column
+na_start_station_name_count <- sum(is.na(cyclistic_bike_data_cleaned$start_station_name))
+
+# Print the count of NA values
+print(paste("Number of NA values in start_station_name:", na_start_station_name_count))
+
+# Check for NA values in the dataset
+na_summary <- cyclistic_bike_data_cleaned %>%
+  summarize_all(~sum(is.na(.)))
+
+# Print the summary of NA values
+print(na_summary)
+
+# Step 6: Create the ride_length column
+cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
+  mutate(ride_length = ended_at - started_at)
+
+# Step 7: Create the day_of_week column
+cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
+  mutate(day_of_week = wday(started_at, label = TRUE, abbr = FALSE))
+
+# Filter the dataset for trips with a ride length of 0 or less than 0
+zero_or_negative_ride_length <- cyclistic_bike_data_cleaned %>%
+  filter(ride_length <= 0)
+
+# View the filtered dataset
+View(zero_or_negative_ride_length)
+
+# Alternatively, you can print the first few rows of the filtered dataset
+print(head(zero_or_negative_ride_length))
+
+
+# Step 1: Drop all rides with a ride length equal to or less than 0 seconds
+cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
+  filter(ride_length > 0)
+
+# Step 2: Drop rides with a duration of 10 seconds or less (optional)
+cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
+  filter(ride_length > 10)
+
+# Print the number of rows remaining after filtering
+print(paste("Number of rows remaining after filtering:", nrow(cyclistic_bike_data_cleaned)))
+
+# Calculate the mean of ride_length
+mean_ride_length <- mean(cyclistic_bike_data_cleaned$ride_length, na.rm = TRUE)
+
+# Calculate the max of ride_length
+max_ride_length <- max(cyclistic_bike_data_cleaned$ride_length, na.rm = TRUE)
+
+# Calculate the mode of day_of_week
+mode_day_of_week <- cyclistic_bike_data_cleaned %>%
+  group_by(day_of_week) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count)) %>%
+  slice(1) %>%
+  pull(day_of_week)
+
+# Print the results
+print(paste("Mean ride length:", mean_ride_length))
+print(paste("Max ride length:", max_ride_length))
+print(paste("Mode day of the week:", mode_day_of_week))
+
+# Step 1: Calculate the proportional share of rides by member type
+ride_share_by_member_type <- cyclistic_bike_data_cleaned %>%
+  group_by(member_casual) %>%
+  summarize(total_rides = n()) %>%
+  mutate(proportion = total_rides / sum(total_rides))
+
+# Print the calculated proportions
+print(ride_share_by_member_type)
+
+# Step 2: Visualize the proportional share using a pie chart
+ggplot(ride_share_by_member_type, aes(x = "", y = proportion, fill = member_casual)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y") +
+  theme_void() +
+  labs(title = "Proportional Share of Rides by Member Type", 
+       fill = "Member Type") +
+  geom_text(aes(label = scales::percent(proportion)), 
+            position = position_stack(vjust = 0.5),
+            color = "white")  # Set text color to white
+
+
+#===============================
+# SHORT RIDES
+#===============================
+# FilterIing rides with a ride length of less than 60 seconds
+short_rides <- cyclistic_bike_data_cleaned %>%
+  filter(ride_length < 60)
+
+# Grouping by member type and summarizing the count of short rides
+short_rides_summary <- short_rides %>%
+  group_by(member_casual) %>%
+  summarize(count = n())
+
+# Print the summary to see the number of short rides by member type
+print(short_rides_summary)
+
+# Calculate the number of rides for each rideable_type by member type
+rides_by_rideable_type_and_member_type <- cyclistic_bike_data_cleaned %>%
+  group_by(member_casual, rideable_type) %>%
+  summarize(ride_count = n(), .groups = 'drop')
+
+# Print the result to check
+print(rides_by_rideable_type_and_member_type)
+
+# Create a bar chart to visualize the number of rides for each rideable_type by member type
+ggplot(rides_by_rideable_type_and_member_type, aes(x = rideable_type, y = ride_count, fill = member_casual)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Number of Rides by Rideable Type and Member Type",
+       x = "Rideable Type",
+       y = "Number of Rides",
+       fill = "Member Type") +
+  theme_minimal()
+
+# Calculate the number of rides for each rideable_type by member type
+rides_by_rideable_type_and_member_type <- cyclistic_bike_data_cleaned %>%
+  group_by(member_casual, rideable_type) %>%
+  summarize(ride_count = n())
+
+# Print the results
+print(rides_by_rideable_type_and_member_type)
+
+# Calculate the number of rides for each day of the week by member type and rideable type
+rides_by_day_of_week <- cyclistic_bike_data_cleaned %>%
+  group_by(member_casual, rideable_type, day_of_week) %>%
+  summarize(ride_count = n()) %>%
+  arrange(member_casual, rideable_type, day_of_week)
+
+# Print the results
+print(rides_by_day_of_week)
+
+# Create an hour column
+cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
+  mutate(hour_of_day = hour(started_at))
+
+# Calculate the number of rides by hour of the day, member type, and rideable type
+rides_by_hour <- cyclistic_bike_data_cleaned %>%
+  group_by(member_casual, rideable_type, hour_of_day) %>%
+  summarize(ride_count = n()) %>%
+  arrange(member_casual, rideable_type, hour_of_day)
+
+# Print the results
+print(rides_by_hour)
+
+# Calculate the number of rides for weekdays vs weekends by member type and rideable type
+rides_by_weekend_weekday <- cyclistic_bike_data_cleaned %>%
+  mutate(is_weekend = if_else(day_of_week %in% c("Saturday", "Sunday"), "Weekend", "Weekday")) %>%
+  group_by(member_casual, rideable_type, is_weekend) %>%
+  summarize(ride_count = n()) %>%
+  arrange(member_casual, rideable_type, is_weekend)
+
+# Print the results
+print(rides_by_weekend_weekday)
+
+# Visualize weekdays vs weekends
+ggplot(rides_by_weekend_weekday, aes(x = is_weekend, y = ride_count, fill = member_casual)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~ rideable_type) +
+  labs(title = "Weekdays vs Weekends Ride Counts by Member Type and Rideable Type",
+       x = "Weekday/Weekend",
+       y = "Number of Rides",
+       fill = "Member Type") +
+  theme_minimal()
+
+# Calculate average ride_length for members and casual riders
+average_ride_length_by_member <- cyclistic_bike_data_cleaned %>%
+  group_by(member_casual) %>%
+  summarise(average_ride_length = mean(ride_length, na.rm = TRUE))
+
+print(average_ride_length_by_member)
+
+# Calculate average ride_length for users by day_of_week
+average_ride_length_by_day <- cyclistic_bike_data_cleaned %>%
+  group_by(day_of_week, member_casual) %>%
+  summarise(average_ride_length = mean(ride_length, na.rm = TRUE))
+
+print(average_ride_length_by_day)
+
+# 3. Line chart for Average Ride Length by Day of the Week
+average_ride_length_by_day <- cyclistic_bike_data_cleaned %>%
+  group_by(day_of_week, member_casual) %>%
+  summarize(average_ride_length = mean(ride_length, na.rm = TRUE))
+print(average_ride_length_by_day)
+
+ggplot(average_ride_length_by_day, aes(x = day_of_week, y = average_ride_length, color = member_casual, group = member_casual)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Average Ride Length by Day of the Week", x = "Day of the Week", y = "Average Ride Length") +
+  theme_minimal()
+
+# Calculate number of rides for users by day_of_week and member_casual
+rides_by_day <- cyclistic_bike_data_cleaned %>%
+  group_by(day_of_week, member_casual) %>%
+  summarise(number_of_rides = n())
+
+print(rides_by_day)
+
+# Export the summary data to CSV files
+write_csv(average_ride_length_by_member, "average_ride_length_by_member.csv")
+write_csv(average_ride_length_by_day, "average_ride_length_by_day.csv")
+write_csv(rides_by_day, "rides_by_day.csv")
+
+View(cyclistic_bike_data_cleaned)
+
+
+# 1. Ride Length Analysis
+# Average, Median, and Maximum ride lengths by member type
+ride_length_stats <- cyclistic_bike_data_cleaned %>%
+  group_by(member_casual) %>%
+  summarise(
+    average_ride_length = mean(ride_length, na.rm = TRUE),
+    median_ride_length = median(ride_length, na.rm = TRUE),
+    max_ride_length = max(ride_length, na.rm = TRUE)
+  )
+
+print(ride_length_stats)
+
+# 2. Day of the Week Usage Patterns
+# Number of rides by day of the week and member type
+rides_by_day_of_week <- cyclistic_bike_data_cleaned %>%
+  group_by(day_of_week, member_casual) %>%
+  summarise(number_of_rides = n())
+
+print(rides_by_day_of_week)
+
+# 3. Time of Day Analysis
+# Extract hour of the day for each ride
+cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
+  mutate(hour_of_day = hour(started_at))
+
+# Number of rides by hour of day and member type
+rides_by_hour <- cyclistic_bike_data_cleaned %>%
+  group_by(hour_of_day, member_casual) %>%
+  summarise(number_of_rides = n())
+
+print(rides_by_hour)
+
+# 4. Station Popularity
+# Top 10 start and end stations by number of rides
+top_start_stations <- cyclistic_bike_data_cleaned %>%
+  group_by(start_station_name, member_casual) %>%
+  summarise(number_of_starts = n()) %>%
+  arrange(desc(number_of_starts)) %>%
+  slice_head(n = 10)
+
+top_end_stations <- cyclistic_bike_data_cleaned %>%
+  group_by(end_station_name, member_casual) %>%
+  summarise(number_of_ends = n()) %>%
+  arrange(desc(number_of_ends)) %>%
+  slice_head(n = 10)
+
+print(top_start_stations)
+print(top_end_stations)
+
+# 5. Rideable Type Preference
+# Distribution of rideable types by member type
+rideable_type_distribution <- cyclistic_bike_data_cleaned %>%
+  group_by(rideable_type, member_casual) %>%
+  summarise(number_of_rides = n())
+
+print(rideable_type_distribution)
+
+# 6. Ride Duration by Day of the Week
+# Average ride length by day of the week and member type
+average_ride_length_by_day <- cyclistic_bike_data_cleaned %>%
+  group_by(day_of_week, member_casual) %>%
+  summarise(average_ride_length = mean(ride_length, na.rm = TRUE))
+
+print(average_ride_length_by_day)
+
+# 7. Geographical Patterns
+# Count rides by start and end coordinates
+ride_count_by_location <- cyclistic_bike_data_cleaned %>%
+  group_by(start_lat, start_lng, end_lat, end_lng, member_casual) %>%
+  summarise(number_of_rides = n())
+
+print(ride_count_by_location)
+
+# 8. Membership Conversion Analysis
+# Identify frequent casual riders
+frequent_casual_riders <- cyclistic_bike_data_cleaned %>%
+  filter(member_casual == "casual") %>%
+  group_by(ride_id) %>%
+  summarise(number_of_rides = n()) %>%
+  filter(number_of_rides > 5) # Example threshold
+
+print(frequent_casual_riders)
+
+# 9. Weather Influence (Assuming we have weather data)
+# Placeholder for weather influence analysis (not performed due to missing data)
+
+# 10. Ride Frequency by Month
+# Extract month and year from the started_at date
+cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
+  mutate(month = floor_date(started_at, "month"))
+
+# Number of rides by month and member type
+rides_by_month <- cyclistic_bike_data_cleaned %>%
+  group_by(month, member_casual) %>%
+  summarise(number_of_rides = n())
+
+print(rides_by_month)
+
+
+# 9. Area Chart for Rides by Month
+rides_by_month <- cyclistic_bike_data_cleaned %>%
+  mutate(month = floor_date(started_at, "month")) %>%
+  group_by(month, member_casual) %>%
+  summarize(number_of_rides = n())
+
+ggplot(rides_by_month, aes(x = month, y = number_of_rides, fill = member_casual)) +
+  geom_area() +
+  labs(title = "Number of Rides by Month", x = "Month", y = "Number of Rides") +
+  theme_minimal()
+# 11. Peak Ride Days (Holidays, Events)
+# Placeholder for peak ride days analysis (not performed due to missing data)
+
+# 12. Trip Distance Analysis
+# Calculate trip distance using start and end coordinates (simplified as Euclidean distance)
+cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
+  mutate(trip_distance = sqrt((end_lat - start_lat)^2 + (end_lng - start_lng)^2))
+
+# Average trip distance by member type
+average_trip_distance <- cyclistic_bike_data_cleaned %>%
+  group_by(member_casual) %>%
+  summarise(average_trip_distance = mean(trip_distance, na.rm = TRUE))
+
+print(average_trip_distance)
+
+# 13. Ride Repetition
+# Identify users with repeated rides
+ride_repetition <- cyclistic_bike_data_cleaned %>%
+  group_by(ride_id, member_casual) %>%
+  summarise(number_of_rides = n()) %>%
+  filter(number_of_rides > 1)
+
+print(ride_repetition)
+
+# Extract the month name from the 'started_at' column
+cyclistic_bike_data_cleaned$month <- format(cyclistic_bike_data_cleaned$started_at, "%B")
+
+# Summarize the number of rides for each month
+monthly_ride_count <- cyclistic_bike_data_cleaned %>%
+  group_by(month) %>%
+  summarize(total_rides = n())
+
+# Display the summary
+print(monthly_ride_count)
+
+# Plot the monthly ride counts
+ggplot(monthly_ride_count, aes(x = month, y = total_rides, fill = month)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Monthly Ride Counts for Cyclistic Bikes",
+       x = "Month",
+       y = "Total Rides") +
+  theme_minimal() +
+  scale_fill_brewer(palette = "Paired") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+
+# Step 6: Ride Length Calculation
+cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
+  mutate(ride_length = as.numeric(difftime(ended_at, started_at, units = "mins")))
+
+# Visualization 1: Histogram of Ride Lengths
+ggplot(cyclistic_bike_data_cleaned, aes(x = ride_length, fill = member_casual)) +
+  geom_histogram(binwidth = 5, alpha = 0.7, position = "identity") +
+  labs(title = "Distribution of Ride Lengths by Member Type",
+       x = "Ride Length (minutes)",
+       y = "Count") +
+  theme_minimal()
+
+# Step 7: Day of the Week Calculation
+cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
+  mutate(day_of_week = wday(started_at, label = TRUE, abbr = FALSE))
+
+# Visualization 2: Bar Chart of Rides by Day of the Week
+ggplot(cyclistic_bike_data_cleaned, aes(x = day_of_week, fill = member_casual)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Number of Rides by Day of the Week and Member Type",
+       x = "Day of the Week",
+       y = "Number of Rides") +
+  theme_minimal()
+
+# Ride Length Statistics -----------------------------------------------
+
+# Calculate average, median, max ride length by member type
+ride_length_stats <- cyclistic_bike_data_cleaned %>%
+  group_by(member_casual) %>%
+  summarise(
+    average_ride_length = mean(ride_length, na.rm = TRUE),
+    median_ride_length = median(ride_length, na.rm = TRUE),
+    max_ride_length = max(ride_length, na.rm = TRUE)
+  )
+
+print(ride_length_stats)
+
+# Visualization 3: Box Plot of Ride Length by Member Type
+ggplot(cyclistic_bike_data_cleaned, aes(x = member_casual, y = ride_length, fill = member_casual)) +
+  geom_boxplot() +
+  labs(title = "Ride Length Distribution by Member Type",
+       x = "Member Type",
+       y = "Ride Length (minutes)") +
+  theme_minimal()
+
+# Time of Day Analysis ---------------------------------------------------
+
+# Extract hour of the day for each ride
+cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
+  mutate(hour_of_day = hour(started_at))
+
+# Visualization 4: Line Chart of Rides by Hour of Day
+rides_by_hour <- cyclistic_bike_data_cleaned %>%
+  group_by(hour_of_day, member_casual) %>%
+  summarise(number_of_rides = n())
+
+ggplot(rides_by_hour, aes(x = hour_of_day, y = number_of_rides, color = member_casual)) +
+  geom_line(size = 1) +
+  labs(title = "Number of Rides by Hour of Day",
+       x = "Hour of Day",
+       y = "Number of Rides") +
+  theme_minimal()
+
+# Station Popularity -----------------------------------------------------
+
+# Top 10 start and end stations by number of rides
+top_start_stations <- cyclistic_bike_data_cleaned %>%
+  group_by(start_station_name, member_casual) %>%
+  summarise(number_of_starts = n()) %>%
+  arrange(desc(number_of_starts)) %>%
+  slice_head(n = 10)
+
+top_end_stations <- cyclistic_bike_data_cleaned %>%
+  group_by(end_station_name, member_casual) %>%
+  summarise(number_of_ends = n()) %>%
+  arrange(desc(number_of_ends)) %>%
+  slice_head(n = 10)
+
+print(top_start_stations)
+print(top_end_stations)
+
+# Visualization 5: Bar Chart of Top Start and End Stations
+ggplot(top_start_stations, aes(x = reorder(start_station_name, number_of_starts), y = number_of_starts, fill = member_casual)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Top 10 Start Stations by Member Type",
+       x = "Start Station",
+       y = "Number of Rides") +
+  coord_flip() +
+  theme_minimal()
+
+# Visualization 6: Bar Chart for Top End Stations
+ggplot(top_end_stations, aes(x = reorder(end_station_name, number_of_ends), y = number_of_ends, fill = member_casual)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Top 10 End Stations by Member Type",
+       x = "End Station",
+       y = "Number of Rides") +
+  coord_flip() +
+  theme_minimal()
+
+# Ride Frequency by Month ------------------------------------------------
+
+# Extract month and year from the started_at date
+cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
+  mutate(month = floor_date(started_at, "month"))
+
+# Number of rides by month and member type
+rides_by_month <- cyclistic_bike_data_cleaned %>%
+  group_by(month, member_casual) %>%
+  summarise(number_of_rides = n())
+
+# Visualization 7: Line Chart of Monthly Ride Counts
+ggplot(rides_by_month, aes(x = month, y = number_of_rides, color = member_casual)) +
+  geom_line(size = 1) +
+  labs(title = "Monthly Ride Counts by Member Type",
+       x = "Month",
+       y = "Number of Rides") +
+  theme_minimal()
+
+# Additional Analysis ----------------------------------------------------
+
+# Calculate trip distance
+cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
+  mutate(trip_distance = sqrt((end_lat - start_lat)^2 + (end_lng - start_lng)^2))
+
+# Visualization 8: Scatterplot of Trip Distance by Ride Length
+ggplot(cyclistic_bike_data_cleaned, aes(x = trip_distance, y = ride_length, color = member_casual)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "Trip Distance vs Ride Length",
+       x = "Trip Distance (approx. in degrees)",
+       y = "Ride Length (minutes)") +
+  theme_minimal()
+
+# Rideable Type Distribution ---------------------------------------------
+
+# Distribution of rideable types by member type
+rideable_type_distribution <- cyclistic_bike_data_cleaned %>%
+  group_by(rideable_type, member_casual) %>%
+  summarise(number_of_rides = n())
+
+# Visualization 9: Pie Chart of Rideable Type Distribution
+ggplot(rideable_type_distribution, aes(x = "", y = number_of_rides, fill = rideable_type)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar("y", start = 0) +
+  facet_wrap(~member_casual) +
+  labs(title = "Distribution of Rideable Types by Member Type",
+       x = NULL,
+       y = NULL) +
+  theme_void()
+
+# Geographical Patterns --------------------------------------------------
+
+# Visualization 10: Bubble Map of Rides by Location
+ggplot(cyclistic_bike_data_cleaned, aes(x = start_lng, y = start_lat, size = number_of_rides, color = member_casual)) +
+  geom_point(alpha = 0.5) +
+  labs(title = "Geographical Distribution of Rides by Start Location",
+       x = "Longitude",
+       y = "Latitude") +
+  theme_minimal()
