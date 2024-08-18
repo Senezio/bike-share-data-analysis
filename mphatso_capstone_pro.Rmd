@@ -48,27 +48,14 @@ library(osmdata)
 file_path <- "C:/Users/mphat/OneDrive/Desktop/Mphatso_capston_Project/"
 
 # Loading each dataset into a separate data frame
-august_2023 <- read_csv(paste0(file_path, "202308-divvy-tripdata.csv"))
-september_2023 <- read_csv(paste0(file_path, "202309-divvy-tripdata.csv"))
-october_2023 <- read_csv(paste0(file_path, "202310-divvy-tripdata.csv"))
-november_2023 <- read_csv(paste0(file_path, "202311-divvy-tripdata.csv"))
-december_2023 <- read_csv(paste0(file_path, "202312-divvy-tripdata.csv"))
-january_2024 <- read_csv(paste0(file_path, "202401-divvy-tripdata.csv"))
-february_2024 <- read_csv(paste0(file_path, "202402-divvy-tripdata.csv"))
-march_2024 <- read_csv(paste0(file_path, "202403-divvy-tripdata.csv"))
-april_2024 <- read_csv(paste0(file_path, "202404-divvy-tripdata.csv"))
-may_2024 <- read_csv(paste0(file_path, "202405-divvy-tripdata.csv"))
-june_2024 <- read_csv(paste0(file_path, "202406-divvy-tripdata.csv"))
-july_2024 <- read_csv(paste0(file_path, "202407-divvy-tripdata.csv"))
+august_2023 <- read_csv(paste0(file_path, "cleaned_cyclistic_bike_data.csv"))
 
 #====================================================
 # STEP 2: WRANGLE DATA AND COMBINE INTO A SINGLE FILE
 #====================================================
 
 # Combining all the data frames into one main data frame
-cyclistic_bike_data <- bind_rows(august_2023, september_2023, october_2023, november_2023, 
-                                 december_2023, january_2024, february_2024, march_2024, 
-                                 april_2024, may_2024, june_2024, july_2024)
+cyclistic_bike_data <- bind_rows(august_2023)
 
 ```
 
@@ -186,8 +173,8 @@ I added new columns to enhance the dataset:
 # Filter the dataset for trips with a ride length of 0 or less than 0
 zero_or_negative_ride_length <- cyclistic_bike_data_cleaned %>%
   filter(ride_length <= 0)
-View(zero_or_negative_ride_length)
-print(head(zero_or_negative_ride_length))
+
+print((zero_or_negative_ride_length))
 
 # Drop all rides with a ride length equal to or less than 0 seconds
 cyclistic_bike_data_cleaned <- cyclistic_bike_data_cleaned %>%
@@ -356,6 +343,16 @@ ggplot(bike_usage_by_type, aes(x = rideable_type, y = ride_count, fill = member_
 ```
 
 The visualization of this data using a bar chart reveals that classic bikes are preferred by annual members, while casual riders lean more towards electric bikes. This suggests that classic bikes are a staple for long-term users, while casual riders may seek the added convenience of electric bikes.
+
+```{r  rides for each rideable_type, include=FALSE}
+# Calculating the number of rides for each rideable_type by member type
+rides_by_rideable_type_and_member_type <- cyclistic_bike_data_cleaned %>%
+  group_by(member_casual, rideable_type) %>%
+  summarize(ride_count = n(), .groups = 'drop')
+
+# Printing the result to check
+print(rides_by_rideable_type_and_member_type)
+```
 
 ```{r chart of rideable_type by member type, echo=FALSE}
 # Plot a bar chart of rideable_type by member type
